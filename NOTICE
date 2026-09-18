@@ -1,0 +1,8 @@
+flokk
+Copyright 2026 Bart van Arnhem
+
+This product includes the terminal-emulator module from termux-app
+(https://github.com/termux/termux-app), which is derived from
+"Terminal Emulator for Android" and is licensed separately from the rest
+of that repository under the Apache License, Version 2.0. flokk depends
+on it as an unmodified binary artifact (com.github.termux.termux-app:terminal-emulator).

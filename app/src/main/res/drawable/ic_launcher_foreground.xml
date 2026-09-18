@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Pixel flock: three birds drawn as square pixels on a character-cell grid, matching
+         the "1c Pixel flock" direction from the flokk logo design doc. One white bird leads,
+         two yellow ones flank it (Tui.accentYellow, the highlighted-workspace color), each a
+         shallow V of five pixels. -->
+    <path
+        android:fillColor="#FAC775"
+        android:pathData="M30.6,54.0 h3.6 v3.6 h-3.6 Z M34.2,57.6 h3.6 v3.6 h-3.6 Z M37.8,61.2 h3.6 v3.6 h-3.6 Z M41.4,57.6 h3.6 v3.6 h-3.6 Z M45.0,54.0 h3.6 v3.6 h-3.6 Z M59.4,54.0 h3.6 v3.6 h-3.6 Z M63.0,57.6 h3.6 v3.6 h-3.6 Z M66.6,61.2 h3.6 v3.6 h-3.6 Z M70.2,57.6 h3.6 v3.6 h-3.6 Z M73.8,54.0 h3.6 v3.6 h-3.6 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45.0,43.2 h3.6 v3.6 h-3.6 Z M48.6,46.8 h3.6 v3.6 h-3.6 Z M52.2,50.4 h3.6 v3.6 h-3.6 Z M55.8,46.8 h3.6 v3.6 h-3.6 Z M59.4,43.2 h3.6 v3.6 h-3.6 Z" />
+</vector>
