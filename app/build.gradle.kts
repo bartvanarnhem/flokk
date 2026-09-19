@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.orbisk.flokk"
+    namespace = "com.flokk.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.orbisk.flokk"
+        applicationId = "com.flokk.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
