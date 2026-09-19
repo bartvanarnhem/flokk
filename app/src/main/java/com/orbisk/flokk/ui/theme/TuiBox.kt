@@ -338,6 +338,31 @@ fun TuiExpandableSection(
     }
 }
 
+/** A `[x] label` / `[ ] label` toggle — the bracket-checkbox style already used inline for
+ *  one-off booleans (key passphrase protection, etc.), pulled out for reuse. */
+@Composable
+fun TuiCheckbox(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = { onCheckedChange(!checked) },
+        ),
+    ) {
+        Text(
+            text = if (checked) "[x] " else "[ ] ",
+            style = Tui.body.copy(color = Tui.accentGreen),
+        )
+        Text(text = label, style = Tui.body.copy(color = Tui.textDim))
+    }
+}
+
 @Composable
 fun TuiConfirmDialog(
     title: String,

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -33,12 +34,15 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,8 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.orbisk.flokk.herdr.AgentState
+import com.orbisk.flokk.herdr.HerdrRepository
+import com.orbisk.flokk.herdr.HostWorkspace
 import com.orbisk.flokk.herdr.RepoState
-import com.orbisk.flokk.herdr.WorkspaceOverview
 import com.orbisk.flokk.terminal.TermKeys
 import com.orbisk.flokk.terminal.TerminalCanvasView
 import com.orbisk.flokk.terminal.TerminalInputView
@@ -70,28 +75,113 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+/** Everything read off every connected host's own [HerdrRepository.state] in one pass, so
+ *  the tab strip and the per-host status line below both drive off the same subscriptions
+ *  instead of each walking [repositories] again. */
+private class Aggregate(
+    val items: List<HostWorkspace>,
+    val hostStates: Map<String, RepoState.Connected>,
+    val reconnecting: Map<String, Boolean>,
+)
+
+/** Subscribes to every connected host's state, `key`-scoped per profile id so a host that
+ *  disconnects mid-composition cleanly drops its own subscription instead of the whole set
+ *  restarting. */
+@Composable
+private fun rememberAggregate(repositories: Map<String, HerdrRepository>): Aggregate {
+    val items = mutableListOf<HostWorkspace>()
+    val hostStates = mutableMapOf<String, RepoState.Connected>()
+    val reconnecting = mutableMapOf<String, Boolean>()
+    for ((profileId, repo) in repositories) {
+        key(profileId) {
+            val state by repo.state.collectAsState()
+            val connected = state as? RepoState.Connected
+            val profile = repo.currentProfile
+            if (connected != null && profile != null) {
+                hostStates[profileId] = connected
+                reconnecting[profileId] = connected.reconnecting
+                for (overview in connected.workspaces) items.add(HostWorkspace(profile, overview))
+            }
+        }
+    }
+    return Aggregate(items, hostStates, reconnecting)
+}
+
+/** One [WorkspaceSessionCache] per connected host, each still keyed on that host's own
+ *  connection generation exactly as the single-host version was — a host's own reconnect
+ *  must only kill that host's sessions, never another connected host's. */
+@Composable
+private fun rememberAllSessions(
+    repositories: Map<String, HerdrRepository>,
+    currentKey: String?,
+): Map<String, WorkspaceSessionCache> {
+    val (currentProfileId, currentWorkspaceId) = splitKey(currentKey)
+    val result = mutableMapOf<String, WorkspaceSessionCache>()
+    for ((profileId, repo) in repositories) {
+        key(profileId) {
+            val generation by repo.connectionGeneration.collectAsState()
+            val rawId = currentWorkspaceId.takeIf { profileId == currentProfileId }
+            result[profileId] = rememberWorkspaceSessions(repo, rawId, generation)
+        }
+    }
+    return result
+}
+
+private fun splitKey(key: String?): Pair<String?, String?> {
+    if (key == null) return null to null
+    val idx = key.indexOf(':')
+    if (idx < 0) return null to null
+    return key.substring(0, idx) to key.substring(idx + 1)
+}
+
+private fun Map<String, WorkspaceSessionCache>.sessionFor(key: String?) =
+    splitKey(key).let { (profileId, workspaceId) -> profileId?.let { this[it] }?.get(workspaceId) }
+
+private fun Map<String, WorkspaceSessionCache>.removeSession(key: String) {
+    val (profileId, workspaceId) = splitKey(key)
+    if (profileId != null && workspaceId != null) this[profileId]?.remove(workspaceId)
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WorkspaceScreen(onBack: () -> Unit) {
     val app = LocalFlokk.current
     val scope = rememberCoroutineScope()
-    val repoState by app.repository.state.collectAsState()
-    val connectionGeneration by app.repository.connectionGeneration.collectAsState()
-    val connected = repoState as? RepoState.Connected
-    val workspaces = connected?.workspaces.orEmpty()
+    val repositories by app.connectionManager.repositories.collectAsState()
+    val aggregate = rememberAggregate(repositories)
 
-    // Nothing is selected until the user picks a tab; until then we follow the first workspace
-    // the poll reports, which is also what makes this screen land on something right after connect.
-    var selectedWorkspaceId by remember { mutableStateOf<String?>(null) }
-    val currentWorkspaceId = selectedWorkspaceId ?: workspaces.firstOrNull()?.workspace?.id
+    // Most-recently-selected first: with several hosts connected, the tab strip can span more
+    // workspaces than fit on screen, so the ones you're actually moving between stay up front
+    // instead of scattered wherever their host happened to report them. Persisted so the order
+    // (and, via `currentKey` below, which tab you land on) survives an app restart instead of
+    // resetting to whatever each host happens to report first.
+    var recentKeys by remember { mutableStateOf(app.workspaceOrderStore.load()) }
+    val workspaces = remember(aggregate.items, recentKeys) {
+        val rank = recentKeys.withIndex().associate { (i, k) -> k to i }
+        aggregate.items.sortedBy { rank[it.key] ?: Int.MAX_VALUE }
+    }
+
+    // Nothing is selected until the user picks a tab; until then we follow the most recently
+    // used one (the front of the now-sorted list above), which is also what makes this screen
+    // land on something right after the first connect.
+    var selectedKey by remember { mutableStateOf<String?>(null) }
+    val currentKey = selectedKey ?: workspaces.firstOrNull()?.key
     var fontSize by remember { mutableFloatStateOf(13f) }
 
-    val sessions = rememberWorkspaceSessions(app.repository, currentWorkspaceId, connectionGeneration)
-    val session = sessions.get(currentWorkspaceId)
+    LaunchedEffect(currentKey) {
+        val key = currentKey ?: return@LaunchedEffect
+        val reordered = listOf(key) + recentKeys.filterNot { it == key }
+        recentKeys = reordered
+        app.workspaceOrderStore.save(reordered)
+    }
+
+    val allSessions = rememberAllSessions(repositories, currentKey)
+    val session = allSessions.sessionFor(currentKey)
 
     var inputView by remember { mutableStateOf<TerminalInputView?>(null) }
     val keyboardVisible = WindowInsets.isImeVisible
-    var pendingClose by remember { mutableStateOf<WorkspaceOverview?>(null) }
+    var pendingClose by remember { mutableStateOf<HostWorkspace?>(null) }
+    var newWorkspaceMenuOpen by remember { mutableStateOf(false) }
 
     // Visible by default, as soon as a pane is attached — matching a real terminal app.
     LaunchedEffect(session, inputView) {
@@ -104,7 +194,9 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             .background(Tui.background)
             .imePadding(),
     ) {
-        val current = workspaces.firstOrNull { it.workspace.id == currentWorkspaceId }
+        val current = workspaces.firstOrNull { it.key == currentKey }
+        val currentRepo = current?.profile?.id?.let { repositories[it] }
+        val currentHostState = current?.profile?.id?.let { aggregate.hostStates[it] }
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
@@ -114,8 +206,8 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             Text(text = clock.format(System.currentTimeMillis()), style = Tui.label.copy(color = Tui.textFaint))
             Text(
                 text = listOfNotNull(
-                    app.repository.currentProfile?.displayName,
-                    connected?.lastPollMs?.let { "${it}ms" },
+                    current?.profile?.displayName,
+                    currentHostState?.lastPollMs?.let { "${it}ms" },
                 ).joinToString(" · "),
                 style = Tui.label.copy(color = Tui.textFaint),
             )
@@ -133,20 +225,20 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 Column {
                     Row {
                         Text(
-                            text = current?.workspace?.label ?: "no workspace",
+                            text = current?.overview?.workspace?.label ?: "no workspace",
                             style = Tui.title,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = " [${current?.agent?.state.statusLabel()}]",
-                            style = Tui.label.copy(color = current?.agent?.state.color()),
+                            text = " [${current?.overview?.agent?.state.statusLabel()}]",
+                            style = Tui.label.copy(color = current?.overview?.agent?.state.color()),
                         )
                     }
                     Text(
                         text = listOfNotNull(
-                            current?.agent?.kind ?: "shell",
-                            current?.workspace?.cwd,
+                            current?.overview?.agent?.kind ?: "shell",
+                            current?.overview?.workspace?.cwd,
                         ).joinToString(" · "),
                         style = Tui.label.copy(color = Tui.textFaint),
                         maxLines = 1,
@@ -154,7 +246,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     )
                 }
             }
-            if (connected?.reconnecting == true) {
+            if (current?.profile?.id?.let { aggregate.reconnecting[it] } == true) {
                 CircularProgressIndicator(
                     color = Tui.accentBlue,
                     strokeWidth = 2.dp,
@@ -164,20 +256,38 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 TuiIconButton(
                     icon = Icons.Filled.Refresh,
                     contentDescription = "Force reconnect",
-                    tint = Tui.textDim,
-                    onClick = { scope.launch { app.repository.reconnect() } },
+                    tint = if (currentRepo != null) Tui.textDim else Tui.textFaint,
+                    onClick = { currentRepo?.let { repo -> scope.launch { repo.reconnect() } } },
                 )
             }
-            TuiIconButton(
-                icon = Icons.Filled.Add,
-                contentDescription = "New workspace",
-                tint = Tui.textDim,
-                onClick = {
-                    scope.launch {
-                        app.repository.createWorkspace().onSuccess { selectedWorkspaceId = it }
+            Box {
+                TuiIconButton(
+                    icon = Icons.Filled.Add,
+                    contentDescription = "New workspace",
+                    tint = if (repositories.isEmpty()) Tui.textFaint else Tui.textDim,
+                    onClick = {
+                        when {
+                            repositories.isEmpty() -> Unit
+                            repositories.size == 1 -> {
+                                val repo = repositories.values.first()
+                                scope.launch { repo.createWorkspace().onSuccess { id -> selectedKey = "${repo.currentProfile?.id}:$id" } }
+                            }
+                            else -> newWorkspaceMenuOpen = true
+                        }
+                    },
+                )
+                DropdownMenu(expanded = newWorkspaceMenuOpen, onDismissRequest = { newWorkspaceMenuOpen = false }) {
+                    for ((profileId, repo) in repositories) {
+                        DropdownMenuItem(
+                            text = { Text(repo.currentProfile?.displayName ?: profileId) },
+                            onClick = {
+                                newWorkspaceMenuOpen = false
+                                scope.launch { repo.createWorkspace().onSuccess { id -> selectedKey = "$profileId:$id" } }
+                            },
+                        )
                     }
-                },
-            )
+                }
+            }
             TuiIconButton(
                 icon = Icons.Filled.Close,
                 contentDescription = "Close workspace",
@@ -194,8 +304,9 @@ fun WorkspaceScreen(onBack: () -> Unit) {
 
         WorkspaceTabsRow(
             workspaces = workspaces,
-            currentId = currentWorkspaceId,
-            onSelect = { selectedWorkspaceId = it },
+            currentKey = currentKey,
+            multiHost = repositories.size > 1,
+            onSelect = { selectedKey = it },
         )
 
         Box(
@@ -219,8 +330,9 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             if (activeSession == null) {
                 Text(
                     text = when {
-                        repoState is RepoState.Connecting -> "connecting..."
-                        currentWorkspaceId == null -> connected?.staleError ?: "no active workspaces"
+                        repositories.isEmpty() -> "not connected to any host"
+                        currentKey == null -> aggregate.hostStates.values.firstNotNullOfOrNull { it.staleError }
+                            ?: "no active workspaces"
                         else -> "attaching..."
                     },
                     style = Tui.label,
@@ -263,14 +375,16 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     pendingClose?.let { toClose ->
         TuiConfirmDialog(
             title = "Close workspace?",
-            text = "“${toClose.workspace.label}” will be closed on the host.",
+            text = "“${toClose.overview.workspace.label}” will be closed on the host.",
             confirmLabel = "Close",
             onConfirm = {
-                val id = toClose.workspace.id
+                val key = toClose.key
                 pendingClose = null
-                if (selectedWorkspaceId == id) selectedWorkspaceId = null
-                sessions.remove(id)
-                scope.launch { app.repository.closeWorkspace(id) }
+                if (selectedKey == key) selectedKey = null
+                allSessions.removeSession(key)
+                val repo = repositories[toClose.profile.id]
+                val workspaceId = toClose.overview.workspace.id
+                scope.launch { repo?.closeWorkspace(workspaceId) }
             },
             onDismiss = { pendingClose = null },
         )
@@ -296,13 +410,14 @@ private fun AgentState?.indicatorColor(): Color = when (this) {
 /** A horizontal strip of workspace tabs, replacing individual tiles once zoomed into one. */
 @Composable
 private fun WorkspaceTabsRow(
-    workspaces: List<WorkspaceOverview>,
-    currentId: String?,
+    workspaces: List<HostWorkspace>,
+    currentKey: String?,
+    multiHost: Boolean,
     onSelect: (String) -> Unit,
 ) {
     // One tick for the whole row, so every running workspace spins in step, and none of them
     // spin — or recompose — while nothing is running.
-    val anyWorking = workspaces.any { it.agent?.state == AgentState.WORKING }
+    val anyWorking = workspaces.any { it.overview.agent?.state == AgentState.WORKING }
     var spinnerFrame by remember { mutableIntStateOf(0) }
     LaunchedEffect(anyWorking) {
         if (!anyWorking) return@LaunchedEffect
@@ -312,15 +427,35 @@ private fun WorkspaceTabsRow(
         }
     }
 
+    // The selected tab is always sorted to index 0 (see the MRU reorder above this row's
+    // caller), so picking one is pointless if the strip is still scrolled to wherever it used
+    // to sit — follow it back to the start the same way switching apps jumps you to the front
+    // of a recents list.
+    //
+    // Keyed on the front item, not on `currentKey` directly: the caller's own reorder (which
+    // moves the newly-selected tab to index 0 of `workspaces`) happens in its own effect one
+    // recomposition after `currentKey` changes, so keying on `currentKey` here raced it —
+    // this scrolled to index 0 of the *not-yet-reordered* list, landing on whatever tab used
+    // to be first instead of the one just tapped, which is what showed up as a half-offscreen
+    // selection outline to the left. Waiting for the front slot itself to change means the
+    // reorder has already landed by the time this runs.
+    val listState = rememberLazyListState()
+    val frontKey = workspaces.firstOrNull()?.key
+    LaunchedEffect(frontKey) {
+        if (frontKey != null) listState.animateScrollToItem(0)
+    }
+
     LazyRow(
+        state = listState,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         contentPadding = PaddingValues(horizontal = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        items(workspaces, key = { it.workspace.id }) { overview ->
-            val isCurrent = overview.workspace.id == currentId
+        items(workspaces, key = { it.key }) { hostWorkspace ->
+            val overview = hostWorkspace.overview
+            val isCurrent = hostWorkspace.key == currentKey
             val state = overview.agent?.state
             val statusColor = state.indicatorColor()
             // Which tab you're looking at and what its agent is doing are two different things,
@@ -335,7 +470,7 @@ private fun WorkspaceTabsRow(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = { onSelect(overview.workspace.id) },
+                        onClick = { onSelect(hostWorkspace.key) },
                     )
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             ) {
@@ -361,7 +496,13 @@ private fun WorkspaceTabsRow(
                     }
                 }
                 Text(
-                    text = overview.agent?.kind ?: "shell",
+                    // With more than one host connected, a bare "shell"/"claude" no longer says
+                    // which machine it's running on — so the host's own name leads instead.
+                    text = if (multiHost) {
+                        listOfNotNull(hostWorkspace.profile.displayName, overview.agent?.kind ?: "shell").joinToString(" · ")
+                    } else {
+                        overview.agent?.kind ?: "shell"
+                    },
                     style = Tui.label.copy(
                         color = if (isCurrent) Tui.textDim else Tui.textFaint,
                         fontSize = 10.sp,

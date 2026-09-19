@@ -51,6 +51,7 @@ import com.orbisk.flokk.ssh.SshTransport
 import com.orbisk.flokk.ui.LocalFlokk
 import com.orbisk.flokk.ui.theme.Tui
 import com.orbisk.flokk.ui.theme.TuiButton
+import com.orbisk.flokk.ui.theme.TuiCheckbox
 import com.orbisk.flokk.ui.theme.TuiConfirmDialog
 import com.orbisk.flokk.ui.theme.TuiExpandableSection
 import com.orbisk.flokk.ui.theme.TuiIconButton
@@ -97,6 +98,7 @@ fun ConnectionFormScreen(
 
     var confirmDelete by remember { mutableStateOf(false) }
     var jumpMenuOpen by remember { mutableStateOf(false) }
+    var autoConnect by remember { mutableStateOf(existing?.autoConnect ?: false) }
 
     val canSave = host.isNotBlank() && username.isNotBlank() &&
         (if (useKeyAuth) privateKey.isNotBlank() else password.isNotBlank())
@@ -117,6 +119,7 @@ fun ConnectionFormScreen(
             herdrBinary = herdrBinary.trim().takeIf { it.isNotBlank() } ?: "herdr",
             jumpHostId = jumpHostId,
             lastConnectedAt = existing?.lastConnectedAt,
+            autoConnect = autoConnect,
         )
         app.profileStore.saveProfile(profile)
         onSaved()
@@ -231,6 +234,12 @@ fun ConnectionFormScreen(
                     },
                 )
             }
+
+            TuiCheckbox(
+                checked = autoConnect,
+                onCheckedChange = { autoConnect = it },
+                label = "autoconnect on start",
+            )
 
             TuiExpandableSection(title = "advanced") {
                 Column {

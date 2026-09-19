@@ -29,7 +29,7 @@ fun FlokkNavHost() {
         composable(ROUTE_CONNECTIONS) {
             ConnectionsScreen(
                 // Kept on the back stack, so the workspace screen's back arrow returns here.
-                onConnected = { navController.navigate(ROUTE_WORKSPACE) { launchSingleTop = true } },
+                onOpenWorkspaces = { navController.navigate(ROUTE_WORKSPACE) { launchSingleTop = true } },
                 onAddConnection = { navController.navigate("connect/$NEW_PROFILE_SENTINEL") },
                 onEditConnection = { profileId -> navController.navigate("connect/$profileId") },
             )

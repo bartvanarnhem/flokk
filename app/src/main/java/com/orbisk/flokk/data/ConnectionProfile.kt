@@ -21,6 +21,9 @@ data class ConnectionProfile(
     /** [ConnectionProfile.id] of another saved profile to tunnel through (an SSH jump/bastion host), if any. */
     val jumpHostId: String? = null,
     val lastConnectedAt: Long? = null,
+    /** Connect to this host automatically when the app starts, alongside every other profile
+     *  with this set — flokk can hold several hosts connected at once. */
+    val autoConnect: Boolean = false,
 ) {
     val target: String get() = "$username@$host:$port"
     val displayName: String get() = name.ifBlank { target }

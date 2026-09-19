@@ -3,8 +3,8 @@ package com.orbisk.flokk
 import android.app.Application
 import com.orbisk.flokk.data.HostKeyStore
 import com.orbisk.flokk.data.ProfileStore
-import com.orbisk.flokk.herdr.HerdrRepository
-import com.orbisk.flokk.ssh.SshTransport
+import com.orbisk.flokk.data.WorkspaceOrderStore
+import com.orbisk.flokk.herdr.HerdrConnectionManager
 import com.orbisk.flokk.ssh.TofuHostKeyVerifier
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
@@ -14,7 +14,10 @@ class FlokkApplication : Application() {
     lateinit var profileStore: ProfileStore
         private set
 
-    lateinit var repository: HerdrRepository
+    lateinit var connectionManager: HerdrConnectionManager
+        private set
+
+    lateinit var workspaceOrderStore: WorkspaceOrderStore
         private set
 
     /** Shared TOFU pinning store, also used by the one-off "install key on host" connection. */
@@ -35,7 +38,8 @@ class FlokkApplication : Application() {
         profileStore = ProfileStore(this)
         val hostKeyStore = HostKeyStore(this)
         hostKeyVerifier = TofuHostKeyVerifier(hostKeyStore)
-        val transport = SshTransport(hostKeyVerifier)
-        repository = HerdrRepository(transport, profileStore)
+        connectionManager = HerdrConnectionManager(profileStore, hostKeyVerifier)
+        workspaceOrderStore = WorkspaceOrderStore(this)
+        connectionManager.autoConnectAll()
     }
 }
