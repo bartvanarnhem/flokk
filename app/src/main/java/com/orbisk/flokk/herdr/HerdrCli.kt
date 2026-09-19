@@ -106,9 +106,20 @@ class HerdrCli(
         return SnapshotResult.Success(overviews)
     }
 
-    /** The interactive command to type into a PTY shell to attach to [terminalId]. */
+    /**
+     * The interactive command to type into a PTY shell to attach to [terminalId].
+     *
+     * Always passes `--takeover`: flokk is a single-user client, so the only "other" client
+     * that could already hold this terminal is a previous flokk attach whose channel died
+     * without a clean detach (the app backgrounded, a network drop, a force-kill) — herdr
+     * still refuses a fresh attach without it, with "terminal already has an attached
+     * client; retry with --takeover". Reclaiming our own stale attachment is always correct
+     * here, unlike in a multi-user setting where taking over could steal someone else's.
+     */
     fun attachCommand(terminalId: String): String =
-        herdr("terminal attach ${shellQuote(terminalId)}")
+        // Positional TERMINAL_ID must come before --takeover: herdr's arg parser mis-handles
+        // `--takeover <id>` and rejects the id as an unknown option in that order.
+        herdr("terminal attach ${shellQuote(terminalId)} --takeover")
 
     /** `herdr workspace create` — returns the new workspace's id from the command's own JSON reply. */
     suspend fun createWorkspace(): Result<String> {

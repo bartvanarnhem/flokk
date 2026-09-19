@@ -49,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -219,11 +220,12 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 Text(
                     text = when {
                         repoState is RepoState.Connecting -> "connecting..."
-                        currentWorkspaceId == null -> "no active workspaces"
+                        currentWorkspaceId == null -> connected?.staleError ?: "no active workspaces"
                         else -> "attaching..."
                     },
                     style = Tui.label,
-                    modifier = Modifier.align(Alignment.Center),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
                 )
             } else {
                 TerminalCanvasView(
