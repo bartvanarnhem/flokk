@@ -65,6 +65,27 @@ private data class CellPos(val row: Int, val col: Int)
 private fun CellPos.orderedWith(other: CellPos): Pair<CellPos, CellPos> =
     if (row < other.row || (row == other.row && col <= other.col)) this to other else other to this
 
+/** One screen or scrollback row's raw characters, up to [cols], same row-addressing as
+ *  [com.termux.terminal.TerminalBuffer.getSelectedText] (0 = top of the live screen,
+ *  negative = scrollback). */
+private fun TerminalEmulator.rowText(row: Int, cols: Int): String {
+    val lineObject = screen.allocateFullLineIfNecessary(screen.externalToInternalRow(row))
+    val used = lineObject.spaceUsed.coerceIn(0, cols)
+    return String(lineObject.mText, 0, used)
+}
+
+/** The word-character span touching column [col] in [line] — Termux's own long-press
+ *  selection unit. Whitespace doesn't extend; tapping whitespace yields a zero-width span
+ *  at that column, same as tapping it used to before word selection existed. */
+private fun wordBoundsAt(line: String, col: Int): IntRange {
+    if (line.isEmpty() || col !in line.indices || line[col].isWhitespace()) return col..col
+    var start = col
+    while (start > 0 && !line[start - 1].isWhitespace()) start--
+    var end = col
+    while (end < line.length - 1 && !line[end + 1].isWhitespace()) end++
+    return start..end
+}
+
 /** A URL detected on one visible row, in cell columns, so both drawing and tap hit-testing
  *  can use the exact same span. */
 private data class TerminalLink(val row: Int, val startCol: Int, val endColExclusive: Int, val url: String)
@@ -267,9 +288,16 @@ fun TerminalCanvasView(
                         // making selection nearly impossible to trigger in practice.
                         detectTerminalGestures(
                             onSelectStart = { offset ->
+                                // Termux itself: a long-press alone selects the whole word
+                                // under the finger, not just the one cell touched, so it's
+                                // immediately copyable without needing a precise drag first.
+                                // A further drag (below) still extends past this from either
+                                // end, ordered by `orderedWith` regardless of direction.
                                 val cell = cellAt(offset)
-                                selectionAnchor = cell
-                                selectionCursor = cell
+                                val line = session.withEmulator { it.rowText(cell.row - scrollRows, cols) }.orEmpty()
+                                val word = wordBoundsAt(line, cell.col)
+                                selectionAnchor = CellPos(cell.row, word.first)
+                                selectionCursor = CellPos(cell.row, word.last)
                             },
                             onSelectDrag = { offset -> selectionCursor = cellAt(offset) },
                             onSelectEnd = { copySelection() },
