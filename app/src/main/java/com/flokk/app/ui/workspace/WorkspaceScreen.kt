@@ -497,9 +497,13 @@ private fun WorkspaceTabsRow(
                 }
                 Text(
                     // With more than one host connected, a bare "shell"/"claude" no longer says
-                    // which machine it's running on — so the host's own name leads instead.
+                    // which machine it's running on — so the host's own name leads, clipped to
+                    // an initial so it doesn't blow up the tile's width just to disambiguate.
                     text = if (multiHost) {
-                        listOfNotNull(hostWorkspace.profile.displayName, overview.agent?.kind ?: "shell").joinToString(" · ")
+                        listOfNotNull(
+                            hostWorkspace.profile.displayName.take(2),
+                            overview.agent?.kind ?: "shell",
+                        ).joinToString(" · ")
                     } else {
                         overview.agent?.kind ?: "shell"
                     },
