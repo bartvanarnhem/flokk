@@ -30,6 +30,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -37,9 +38,12 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -125,6 +129,10 @@ fun TerminalCanvasView(
     val decaySpec = remember(density) { splineBasedDecay<Float>(density) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    // The real system text-selection toolbar (copy/paste/select all), not a custom-drawn one —
+    // same floating menu every other text field on the device shows, just fed our own actions.
+    val textToolbar = LocalTextToolbar.current
+    var canvasOffsetInWindow by remember { mutableStateOf(Offset.Zero) }
     val paint = remember {
         Paint().apply {
             typeface = Typeface.MONOSPACE
@@ -134,6 +142,10 @@ fun TerminalCanvasView(
     }
     var selectionAnchor by remember(session) { mutableStateOf<CellPos?>(null) }
     var selectionCursor by remember(session) { mutableStateOf<CellPos?>(null) }
+    // Termux's own long-press behavior: releasing doesn't copy by itself — it opens a small
+    // menu (copy/paste/select all) next to the selection, same as the floating toolbar a real
+    // EditText shows, so a drag that overshoots the intended word isn't copied by accident.
+    var menuVisible by remember(session) { mutableStateOf(false) }
     var copiedTick by remember(session) { mutableIntStateOf(0) }
     var showCopiedBadge by remember(session) { mutableStateOf(false) }
     var linkErrorTick by remember(session) { mutableIntStateOf(0) }
@@ -272,6 +284,9 @@ fun TerminalCanvasView(
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
+                    // The system toolbar positions itself in window coordinates, not ours, so
+                    // its content rect needs this added in below.
+                    .onGloballyPositioned { canvasOffsetInWindow = it.positionInWindow() }
                     // The partially-scrolled rows above and below the viewport are drawn, not
                     // clipped to whole rows, so they must not bleed outside the terminal.
                     .clipToBounds()
@@ -293,6 +308,7 @@ fun TerminalCanvasView(
                                 // immediately copyable without needing a precise drag first.
                                 // A further drag (below) still extends past this from either
                                 // end, ordered by `orderedWith` regardless of direction.
+                                menuVisible = false
                                 val cell = cellAt(offset)
                                 val line = session.withEmulator { it.rowText(cell.row - scrollRows, cols) }.orEmpty()
                                 val word = wordBoundsAt(line, cell.col)
@@ -300,8 +316,9 @@ fun TerminalCanvasView(
                                 selectionCursor = CellPos(cell.row, word.last)
                             },
                             onSelectDrag = { offset -> selectionCursor = cellAt(offset) },
-                            onSelectEnd = { copySelection() },
+                            onSelectEnd = { menuVisible = true },
                             onScroll = { dy, position ->
+                                menuVisible = false
                                 fling = null // a new drag takes over from any fling still running
                                 when (session.scrollMode()) {
                                     RemoteTerminalSession.ScrollMode.TRANSCRIPT -> {
@@ -333,14 +350,23 @@ fun TerminalCanvasView(
                             },
                             onTap = { offset ->
                                 fling = null
-                                val cell = cellAt(offset)
-                                val link = linkAt(cell)
-                                when {
-                                    link != null -> openLink(link.url)
-                                    scrollPx != 0f -> scrollPx = 0f
-                                    else -> {
-                                        selectionAnchor = null
-                                        selectionCursor = null
+                                if (menuVisible) {
+                                    // First dismiss, same as tapping away from a text field's
+                                    // own selection toolbar — doesn't also fire whatever's
+                                    // underneath the tap.
+                                    selectionAnchor = null
+                                    selectionCursor = null
+                                    menuVisible = false
+                                } else {
+                                    val cell = cellAt(offset)
+                                    val link = linkAt(cell)
+                                    when {
+                                        link != null -> openLink(link.url)
+                                        scrollPx != 0f -> scrollPx = 0f
+                                        else -> {
+                                            selectionAnchor = null
+                                            selectionCursor = null
+                                        }
                                     }
                                 }
                             },
@@ -369,6 +395,48 @@ fun TerminalCanvasView(
                 if (anchor != null && cursor != null) {
                     drawSelectionHighlight(anchor.orderedWith(cursor), cols, cellWidth, cellHeight, subRowPx)
                 }
+            }
+
+            // The real system floating toolbar (ActionMode.TYPE_FLOATING under the hood, via
+            // Compose's TextToolbar) — an imperative "show near this rect" call, not something
+            // that stays composed, so it lives in an effect keyed on whatever should make it
+            // reappear, reposition, or change which actions it offers.
+            LaunchedEffect(menuVisible, selectionAnchor, selectionCursor) {
+                val anchor = selectionAnchor
+                val cursor = selectionCursor
+                if (!menuVisible || anchor == null || cursor == null) {
+                    textToolbar.hide()
+                    return@LaunchedEffect
+                }
+                val (start, end) = anchor.orderedWith(cursor)
+                val hasSelection = session.withEmulator {
+                    !it.screen.getSelectedText(start.col, start.row - scrollRows, end.col, end.row - scrollRows)
+                        .isNullOrEmpty()
+                } == true
+                val rect = Rect(
+                    left = start.col * cellWidth + canvasOffsetInWindow.x,
+                    top = start.row * cellHeight + subRowPx + canvasOffsetInWindow.y,
+                    right = (end.col + 1) * cellWidth + canvasOffsetInWindow.x,
+                    bottom = (end.row + 1) * cellHeight + subRowPx + canvasOffsetInWindow.y,
+                )
+                textToolbar.showMenu(
+                    rect = rect,
+                    onCopyRequested = if (hasSelection) {
+                        { copySelection(); menuVisible = false }
+                    } else {
+                        null
+                    },
+                    onPasteRequested = {
+                        clipboard.getText()?.text?.let { session.paste(it) }
+                        selectionAnchor = null
+                        selectionCursor = null
+                        menuVisible = false
+                    },
+                    onSelectAllRequested = {
+                        selectionAnchor = CellPos(0, 0)
+                        selectionCursor = CellPos(rows - 1, cols - 1)
+                    },
+                )
             }
 
             // `isReady` only means the local emulator was constructed, not that the SSH
