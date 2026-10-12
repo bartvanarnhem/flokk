@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.flokk.app.data.TabLayout
 import com.flokk.app.herdr.AgentState
 import com.flokk.app.herdr.HerdrRepository
 import com.flokk.app.herdr.HostWorkspace
@@ -164,7 +166,10 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     // land on something right after the first connect.
     var selectedKey by remember { mutableStateOf<String?>(null) }
     val currentKey = selectedKey ?: workspaces.firstOrNull()?.key
-    var fontSize by remember { mutableFloatStateOf(13f) }
+    val settings by app.settingsStore.settings.collectAsState()
+    // Pinch-to-zoom adjusts freely from here; picking a preset in settings resets to it.
+    var fontSize by remember(settings.fontSize) { mutableFloatStateOf(settings.fontSize.sp) }
+    var settingsOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentKey) {
         val key = currentKey ?: return@LaunchedEffect
@@ -283,12 +288,19 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 tint = if (keyboardVisible) Tui.accentBlue else Tui.textDim,
                 onClick = { if (keyboardVisible) inputView?.hideKeyboard() else inputView?.showKeyboard() },
             )
+            TuiIconButton(
+                icon = Icons.Filled.Settings,
+                contentDescription = "Settings",
+                onClick = { settingsOpen = true },
+            )
         }
 
         WorkspaceTabsRow(
             workspaces = workspaces,
             currentKey = currentKey,
             multiHost = repositories.size > 1,
+            layout = settings.tabLayout,
+            hostOrder = repositories.keys.toList(),
             onSelect = { selectedKey = it },
         )
 
@@ -372,6 +384,14 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             onDismiss = { pendingClose = null },
         )
     }
+
+    if (settingsOpen) {
+        SettingsDialog(
+            settings = settings,
+            onChange = { transform -> app.settingsStore.update(transform) },
+            onDismiss = { settingsOpen = false },
+        )
+    }
 }
 
 /** The braille "dots" spinner CLIs use while something is running. */
@@ -390,15 +410,21 @@ private fun AgentState?.indicatorColor(): Color = when (this) {
     else -> Tui.textFaint
 }
 
-/** A horizontal strip of workspace tabs, replacing individual tiles once zoomed into one. */
+/**
+ * The workspace tab strip: either one scrollable row of every workspace, or — with
+ * [TabLayout.GROUP_BY_HOST] — one scrollable row per host, ordered as [hostOrder], with
+ * compact single-line tiles since the row itself already says which host they're on.
+ */
 @Composable
 private fun WorkspaceTabsRow(
     workspaces: List<HostWorkspace>,
     currentKey: String?,
     multiHost: Boolean,
+    layout: TabLayout,
+    hostOrder: List<String>,
     onSelect: (String) -> Unit,
 ) {
-    // One tick for the whole row, so every running workspace spins in step, and none of them
+    // One tick for every row, so every running workspace spins in step, and none of them
     // spin — or recompose — while nothing is running.
     val anyWorking = workspaces.any { it.overview.agent?.state == AgentState.WORKING }
     var spinnerFrame by remember { mutableIntStateOf(0) }
@@ -410,6 +436,65 @@ private fun WorkspaceTabsRow(
         }
     }
 
+    when (layout) {
+        TabLayout.SINGLE_ROW -> WorkspaceTabStrip(
+            workspaces = workspaces,
+            currentKey = currentKey,
+            spinnerFrame = spinnerFrame,
+            compact = false,
+            multiHost = multiHost,
+            onSelect = onSelect,
+        )
+        TabLayout.GROUP_BY_HOST -> {
+            // `groupBy` keeps each host's own MRU order; the rows themselves follow
+            // [hostOrder] so they stay put instead of reshuffling on every tab switch.
+            val byHost = workspaces.groupBy { it.profile.id }
+            val orderedHosts = hostOrder.filter { it in byHost } + byHost.keys.filterNot { it in hostOrder }
+            // Padded to the longest label (the font is monospace) so every row's tiles start
+            // at the same x instead of wherever its own host name happens to end.
+            val hostLabels = byHost.mapValues { (_, group) -> group.first().profile.displayName.take(12) }
+            val labelWidth = hostLabels.values.maxOfOrNull { it.length } ?: 0
+            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                for (profileId in orderedHosts) {
+                    key(profileId) {
+                        val group = byHost.getValue(profileId)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (multiHost) {
+                                Text(
+                                    text = hostLabels.getValue(profileId).padEnd(labelWidth),
+                                    style = Tui.label.copy(color = Tui.textFaint, fontSize = 10.sp),
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(start = 12.dp),
+                                )
+                            }
+                            WorkspaceTabStrip(
+                                workspaces = group,
+                                currentKey = currentKey,
+                                spinnerFrame = spinnerFrame,
+                                compact = true,
+                                multiHost = multiHost,
+                                onSelect = onSelect,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One horizontally scrollable row of workspace tiles. */
+@Composable
+private fun WorkspaceTabStrip(
+    workspaces: List<HostWorkspace>,
+    currentKey: String?,
+    spinnerFrame: Int,
+    compact: Boolean,
+    multiHost: Boolean,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     // The selected tab is always sorted to index 0 (see the MRU reorder above this row's
     // caller), so picking one is pointless if the strip is still scrolled to wherever it used
     // to sit — follow it back to the start the same way switching apps jumps you to the front
@@ -430,74 +515,94 @@ private fun WorkspaceTabsRow(
 
     LazyRow(
         state = listState,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = if (compact) 2.dp else 4.dp),
         contentPadding = PaddingValues(horizontal = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         items(workspaces, key = { it.key }) { hostWorkspace ->
-            val overview = hostWorkspace.overview
-            val isCurrent = hostWorkspace.key == currentKey
-            val state = overview.agent?.state
-            val statusColor = state.indicatorColor()
-            // Which tab you're looking at and what its agent is doing are two different things,
-            // so they get two different channels: the yellow frame flokk's own TUI uses for the
-            // focused element marks the current tab, and the dot alone carries agent state.
-            val borderColor = if (isCurrent) Tui.accentYellow else Tui.border
-            val fill = if (isCurrent) Tui.accentYellow.copy(alpha = 0.1f) else Color.Transparent
-            Column(
-                modifier = Modifier
-                    .background(fill, RoundedCornerShape(6.dp))
-                    .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(6.dp))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(hostWorkspace.key) },
-                    )
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = overview.workspace.label,
-                        style = Tui.label.copy(color = if (isCurrent) Tui.text else Tui.textDim),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    when {
-                        state == AgentState.WORKING -> Text(
-                            text = " ${SPINNER_FRAMES[spinnerFrame]}",
-                            style = Tui.label.copy(color = statusColor),
-                        )
-                        state == AgentState.BLOCKED -> Icon(
-                            imageVector = Icons.Filled.Notifications,
-                            contentDescription = "Needs input",
-                            tint = statusColor,
-                            modifier = Modifier.padding(start = 4.dp).size(12.dp),
-                        )
-                        else -> Text(text = " ●", style = Tui.label.copy(color = statusColor))
-                    }
-                }
-                Text(
-                    // With more than one host connected, a bare "shell"/"claude" no longer says
-                    // which machine it's running on — so the host's own name leads, clipped to
-                    // a short prefix so it doesn't blow up the tile's width just to disambiguate.
-                    text = if (multiHost) {
-                        listOfNotNull(
-                            hostWorkspace.profile.displayName.take(4),
-                            overview.agent?.kind ?: "shell",
-                        ).joinToString(" · ")
-                    } else {
-                        overview.agent?.kind ?: "shell"
-                    },
-                    style = Tui.label.copy(
-                        color = if (isCurrent) Tui.textDim else Tui.textFaint,
-                        fontSize = 10.sp,
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            WorkspaceTile(
+                hostWorkspace = hostWorkspace,
+                isCurrent = hostWorkspace.key == currentKey,
+                spinnerFrame = spinnerFrame,
+                compact = compact,
+                multiHost = multiHost,
+                onClick = { onSelect(hostWorkspace.key) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceTile(
+    hostWorkspace: HostWorkspace,
+    isCurrent: Boolean,
+    spinnerFrame: Int,
+    compact: Boolean,
+    multiHost: Boolean,
+    onClick: () -> Unit,
+) {
+    val overview = hostWorkspace.overview
+    val state = overview.agent?.state
+    val statusColor = state.indicatorColor()
+    // Which tab you're looking at and what its agent is doing are two different things,
+    // so they get two different channels: the yellow frame flokk's own TUI uses for the
+    // focused element marks the current tab, and the dot alone carries agent state.
+    val borderColor = if (isCurrent) Tui.accentYellow else Tui.border
+    val fill = if (isCurrent) Tui.accentYellow.copy(alpha = 0.1f) else Color.Transparent
+    Column(
+        modifier = Modifier
+            .background(fill, RoundedCornerShape(6.dp))
+            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(6.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = overview.workspace.label,
+                style = Tui.label.copy(color = if (isCurrent) Tui.text else Tui.textDim),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            when {
+                state == AgentState.WORKING -> Text(
+                    text = " ${SPINNER_FRAMES[spinnerFrame]}",
+                    style = Tui.label.copy(color = statusColor),
                 )
+                state == AgentState.BLOCKED -> Icon(
+                    imageVector = Icons.Filled.Notifications,
+                    contentDescription = "Needs input",
+                    tint = statusColor,
+                    modifier = Modifier.padding(start = 4.dp).size(12.dp),
+                )
+                else -> Text(text = " ●", style = Tui.label.copy(color = statusColor))
             }
+        }
+        if (!compact) {
+            Text(
+                // With more than one host connected, a bare "shell"/"claude" no longer says
+                // which machine it's running on — so the host's own name leads, clipped to
+                // a short prefix so it doesn't blow up the tile's width just to disambiguate.
+                text = if (multiHost) {
+                    listOfNotNull(
+                        hostWorkspace.profile.displayName.take(4),
+                        overview.agent?.kind ?: "shell",
+                    ).joinToString(" · ")
+                } else {
+                    overview.agent?.kind ?: "shell"
+                },
+                style = Tui.label.copy(
+                    color = if (isCurrent) Tui.textDim else Tui.textFaint,
+                    fontSize = 10.sp,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

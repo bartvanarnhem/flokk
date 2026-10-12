@@ -3,6 +3,7 @@ package com.flokk.app
 import android.app.Application
 import com.flokk.app.data.HostKeyStore
 import com.flokk.app.data.ProfileStore
+import com.flokk.app.data.SettingsStore
 import com.flokk.app.data.WorkspaceOrderStore
 import com.flokk.app.herdr.HerdrConnectionManager
 import com.flokk.app.ssh.TofuHostKeyVerifier
@@ -18,6 +19,9 @@ class FlokkApplication : Application() {
         private set
 
     lateinit var workspaceOrderStore: WorkspaceOrderStore
+        private set
+
+    lateinit var settingsStore: SettingsStore
         private set
 
     /** Shared TOFU pinning store, also used by the one-off "install key on host" connection. */
@@ -40,6 +44,7 @@ class FlokkApplication : Application() {
         hostKeyVerifier = TofuHostKeyVerifier(hostKeyStore)
         connectionManager = HerdrConnectionManager(profileStore, hostKeyVerifier)
         workspaceOrderStore = WorkspaceOrderStore(this)
+        settingsStore = SettingsStore(this)
         connectionManager.autoConnectAll()
     }
 }
