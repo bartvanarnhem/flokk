@@ -72,8 +72,6 @@ import com.flokk.app.ui.theme.TuiIconButton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 /** Everything read off every connected host's own [HerdrRepository.state] in one pass, so
  *  the tab strip and the per-host status line below both drive off the same subscriptions
@@ -196,22 +194,6 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     ) {
         val current = workspaces.firstOrNull { it.key == currentKey }
         val currentRepo = current?.profile?.id?.let { repositories[it] }
-        val currentHostState = current?.profile?.id?.let { aggregate.hostStates[it] }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            val clock = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-            Text(text = clock.format(System.currentTimeMillis()), style = Tui.label.copy(color = Tui.textFaint))
-            Text(
-                text = listOfNotNull(
-                    current?.profile?.displayName,
-                    currentHostState?.lastPollMs?.let { "${it}ms" },
-                ).joinToString(" · "),
-                style = Tui.label.copy(color = Tui.textFaint),
-            )
-        }
 
         Row(
             modifier = Modifier
@@ -225,7 +207,8 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 Column {
                     Row {
                         Text(
-                            text = current?.overview?.workspace?.label ?: "no workspace",
+                            text = current?.let { "${it.profile.displayName} · ${it.overview.workspace.label}" }
+                                ?: "no workspace",
                             style = Tui.title,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -498,10 +481,10 @@ private fun WorkspaceTabsRow(
                 Text(
                     // With more than one host connected, a bare "shell"/"claude" no longer says
                     // which machine it's running on — so the host's own name leads, clipped to
-                    // an initial so it doesn't blow up the tile's width just to disambiguate.
+                    // a short prefix so it doesn't blow up the tile's width just to disambiguate.
                     text = if (multiHost) {
                         listOfNotNull(
-                            hostWorkspace.profile.displayName.take(2),
+                            hostWorkspace.profile.displayName.take(4),
                             overview.agent?.kind ?: "shell",
                         ).joinToString(" · ")
                     } else {
