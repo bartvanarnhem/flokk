@@ -50,7 +50,7 @@ fun TermuxModifierRow(session: RemoteTerminalSession?) {
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .background(Tui.background)
-            .padding(vertical = 2.dp),
+            .padding(vertical = 1.dp),
     ) {
         Column(Modifier.weight(8f)) {
             Row(Modifier.fillMaxWidth()) {
@@ -104,7 +104,7 @@ private fun HKey(
     armed: Boolean = false,
     onClick: () -> Unit,
 ) {
-    KeyBox(modifier.height(44.dp), armed = armed, onClick = onClick) {
+    KeyBox(modifier.height(34.dp), armed = armed, onClick = onClick) {
         Text(
             text = label,
             style = TextStyle(
