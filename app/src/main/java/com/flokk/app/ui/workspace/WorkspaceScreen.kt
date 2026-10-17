@@ -186,9 +186,17 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     var pendingClose by remember { mutableStateOf<HostWorkspace?>(null) }
     var newWorkspaceMenuOpen by remember { mutableStateOf(false) }
 
-    // Visible by default, as soon as a pane is attached — matching a real terminal app.
-    LaunchedEffect(session, inputView) {
-        if (session != null) inputView?.showKeyboard()
+    // The soft keyboard only shows while the keyboard button is on; otherwise it is blocked
+    // outright, so typing on a hardware keyboard doesn't pop it up.
+    var softKeyboardOn by remember { mutableStateOf(false) }
+    LaunchedEffect(session, inputView, softKeyboardOn) {
+        if (session != null) inputView?.setSoftKeyboardEnabled(softKeyboardOn)
+    }
+    // Dismissing it with back/the system gesture turns the button off too.
+    var imeWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboardVisible) {
+        if (imeWasVisible && !keyboardVisible) softKeyboardOn = false
+        imeWasVisible = keyboardVisible
     }
 
     Column(
@@ -283,10 +291,10 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 onClick = { current?.let { pendingClose = it } },
             )
             TuiIconButton(
-                icon = if (keyboardVisible) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard,
-                contentDescription = if (keyboardVisible) "Hide keyboard" else "Show keyboard",
-                tint = if (keyboardVisible) Tui.accentBlue else Tui.textDim,
-                onClick = { if (keyboardVisible) inputView?.hideKeyboard() else inputView?.showKeyboard() },
+                icon = if (softKeyboardOn) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard,
+                contentDescription = if (softKeyboardOn) "Hide keyboard" else "Show keyboard",
+                tint = if (softKeyboardOn) Tui.accentBlue else Tui.textDim,
+                onClick = { softKeyboardOn = !softKeyboardOn },
             )
             TuiIconButton(
                 icon = Icons.Filled.Settings,
@@ -359,6 +367,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 view.onText = { text -> session?.sendText(text.replace("\n", "\r")) }
                 view.onBackspace = { session?.write(TermKeys.BACKSPACE, 0, TermKeys.BACKSPACE.size) }
                 view.onEnter = { session?.write(TermKeys.ENTER, 0, TermKeys.ENTER.size) }
+                view.onKey = { bytes -> session?.write(bytes, 0, bytes.size) }
             },
             modifier = Modifier.size(1.dp),
         )

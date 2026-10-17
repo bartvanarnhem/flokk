@@ -16,6 +16,7 @@ object TermKeys {
     val END = esc("[F")
     val PAGE_UP = esc("[5~")
     val PAGE_DOWN = esc("[6~")
+    val DELETE = esc("[3~")
 
     fun ctrl(letter: Char): ByteArray {
         val upper = letter.uppercaseChar()
