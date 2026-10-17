@@ -1,14 +1,9 @@
 package com.flokk.app.terminal
 
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
 import android.text.InputType
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
-import android.view.Window
-import android.view.WindowManager
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -32,7 +27,6 @@ class TerminalInputView(context: Context) : View(context) {
     var onText: (String) -> Unit = {}
     var onBackspace: () -> Unit = {}
     var onEnter: () -> Unit = {}
-    var onKey: (ByteArray) -> Unit = {}
 
     init {
         isFocusable = true
@@ -81,84 +75,14 @@ class TerminalInputView(context: Context) : View(context) {
         }
     }
 
-    /**
-     * Hardware keys (a Bluetooth/USB keyboard) arrive here directly whenever no IME is
-     * bound — which is the normal case, since the soft keyboard is blocked until toggled on.
-     */
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { onEnter(); return true }
-            KeyEvent.KEYCODE_DEL -> { onBackspace(); return true }
-        }
-        val special = when (keyCode) {
-            KeyEvent.KEYCODE_FORWARD_DEL -> TermKeys.DELETE
-            KeyEvent.KEYCODE_TAB -> TermKeys.TAB
-            KeyEvent.KEYCODE_ESCAPE -> TermKeys.ESC
-            KeyEvent.KEYCODE_DPAD_UP -> TermKeys.UP
-            KeyEvent.KEYCODE_DPAD_DOWN -> TermKeys.DOWN
-            KeyEvent.KEYCODE_DPAD_LEFT -> TermKeys.LEFT
-            KeyEvent.KEYCODE_DPAD_RIGHT -> TermKeys.RIGHT
-            KeyEvent.KEYCODE_MOVE_HOME -> TermKeys.HOME
-            KeyEvent.KEYCODE_MOVE_END -> TermKeys.END
-            KeyEvent.KEYCODE_PAGE_UP -> TermKeys.PAGE_UP
-            KeyEvent.KEYCODE_PAGE_DOWN -> TermKeys.PAGE_DOWN
-            else -> null
-        }
-        if (special != null) {
-            onKey(special)
-            return true
-        }
-        val modifiers = KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK
-        val char = event.getUnicodeChar(event.metaState and modifiers.inv())
-        if (char == 0 || char and KeyCharacterMap.COMBINING_ACCENT != 0) {
-            return super.onKeyDown(keyCode, event)
-        }
-        val text = String(Character.toChars(char))
-        when {
-            event.isCtrlPressed && text.length == 1 -> onKey(TermKeys.ctrl(text[0]))
-            event.isAltPressed -> onKey(TermKeys.alt(text[0]))
-            else -> onText(text)
-        }
-        return true
-    }
-
-    private val imm get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-
-    private val window: Window?
-        get() {
-            var ctx = context
-            while (ctx is ContextWrapper) {
-                if (ctx is Activity) return ctx.window
-                ctx = ctx.baseContext
-            }
-            return null
-        }
-
-    /**
-     * Turns the soft keyboard on or off. Off sets [WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM],
-     * so the system keyboard can't pop up on its own (e.g. on focus, or as soon as a key is
-     * typed) — keys then come straight to [onKeyDown] instead. Same mechanism Termux uses for
-     * its "disable soft keyboard" toggle.
-     */
-    fun setSoftKeyboardEnabled(enabled: Boolean) {
+    fun showKeyboard() {
         requestFocus()
-        if (enabled) {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
-            // The window has to re-bind to the IME after the flag clears before a show can land.
-            post {
-                imm?.restartInput(this)
-                imm?.showSoftInput(this, 0)
-            }
-        } else {
-            imm?.hideSoftInputFromWindow(windowToken, 0)
-            window?.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
-        }
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
-    override fun onDetachedFromWindow() {
-        // The flag lives on the activity's window: don't leave the other screens' text fields
-        // without a keyboard.
-        window?.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
-        super.onDetachedFromWindow()
+    fun hideKeyboard() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(windowToken, 0)
     }
 }
