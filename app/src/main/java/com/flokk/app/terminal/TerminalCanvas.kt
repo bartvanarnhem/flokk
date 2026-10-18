@@ -57,6 +57,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 
 private const val TRUECOLOR_MASK = -0x1000000 // top byte 0xFF => already a resolved ARGB color
 
@@ -387,6 +388,8 @@ fun TerminalCanvasView(
                             scrollRows,
                             subRowPx,
                             links,
+                            session.attachments,
+                            session.promptImages,
                         )
                     }
                 }
@@ -595,6 +598,8 @@ private fun drawTerminalFrame(
     scrollRows: Int = 0,
     pixelOffset: Float = 0f,
     linksOut: MutableList<TerminalLink>? = null,
+    attachments: List<Attachment> = emptyList(),
+    promptImages: List<Attachment> = emptyList(),
 ) {
     val screen = emulator.screen
     val columns = emulator.mColumns
@@ -604,8 +609,11 @@ private fun drawTerminalFrame(
     val fm = paint.fontMetrics
     val ascent = -fm.ascent
     val topRow = -scrollRows
+    var cursorShownCol = emulator.cursorCol
 
     val rowChars = CharArray(columns)
+    val rowStyles = LongArray(columns)
+    val shortened = mutableListOf<ShortenedPath>()
     linksOut?.clear()
 
     // One row beyond the viewport at each end: when [pixelOffset] shifts everything down by
@@ -617,22 +625,32 @@ private fun drawTerminalFrame(
         val used = lineObject.spaceUsed.coerceIn(0, columns)
         rowChars.fill(' ')
         System.arraycopy(lineObject.mText, 0, rowChars, 0, used)
+        for (c in 0 until columns) rowStyles[c] = lineObject.getStyle(c)
+        val shownUsed = relabelAttachments(rowChars, rowStyles, used, attachments, promptImages, shortened)
+        if (externalRow == emulator.cursorRow) cursorShownCol = shownColumn(emulator.cursorCol, shortened)
 
         val top = row * cellHeight + pixelOffset
         val baseline = top + ascent
 
+        if (shortened.isNotEmpty()) {
+            paint.color = Tui.accentBlue.copy(alpha = 0.25f).toArgb()
+            for (span in shortened) {
+                canvas.drawRect(span.shownStart * cellWidth, top, min(span.shownEnd, columns) * cellWidth, top + cellHeight, paint)
+            }
+        }
+
         var col = 0
         while (col < columns) {
-            val style = lineObject.getStyle(col)
+            val style = rowStyles[col]
             var runEnd = col + 1
-            while (runEnd < columns && lineObject.getStyle(runEnd) == style) runEnd++
+            while (runEnd < columns && rowStyles[runEnd] == style) runEnd++
 
             drawRun(canvas, paint, rowChars, col, runEnd, style, palette, defaultBackground, top, baseline, cellWidth, cellHeight)
             col = runEnd
         }
 
         if (linksOut != null) {
-            for ((range, url) in findLinksInRow(String(rowChars, 0, used))) {
+            for ((range, url) in findLinksInRow(String(rowChars, 0, shownUsed))) {
                 linksOut.add(TerminalLink(row, range.first, range.last + 1, url))
                 val underlineTop = top + cellHeight - max(1.5f, cellHeight * 0.06f)
                 paint.color = Tui.accentBlue.toArgb()
@@ -648,7 +666,7 @@ private fun drawTerminalFrame(
     }
 
     if (scrollRows == 0 && emulator.shouldCursorBeVisible()) {
-        val cursorCol = emulator.cursorCol.coerceIn(0, columns - 1)
+        val cursorCol = cursorShownCol.coerceIn(0, columns - 1)
         val cursorRow = emulator.cursorRow.coerceIn(0, rows - 1)
         val left = cursorCol * cellWidth
         val top = cursorRow * cellHeight + pixelOffset
@@ -657,6 +675,80 @@ private fun drawTerminalFrame(
         canvas.drawRect(left, top, left + cellWidth, top + cellHeight, paint)
         paint.alpha = 255
     }
+}
+
+/** One attachment path on a row, drawn as its label: source columns [srcStart, srcEnd) shown
+ *  as [shownStart, shownEnd). */
+private class ShortenedPath(val srcStart: Int, val srcEnd: Int, val shownStart: Int, val shownEnd: Int)
+
+/** An agent's own stand-in for a pasted image: opencode's `[Image 1]`, Claude Code's `[Image #1]`. */
+private val IMAGE_PLACEHOLDER = Regex("""\[Image #?(\d+)]""")
+
+/**
+ * Rewrites every attachment's full path on one row to its short label — and every image
+ * placeholder an agent swapped in for one of [promptImages] to that image's label — shifting
+ * the rest of the row to fit, and records each rewrite in [out]. Returns the row's new used
+ * width. A path the remote program wrapped across two rows isn't matched and shows in full.
+ */
+private fun relabelAttachments(
+    chars: CharArray,
+    styles: LongArray,
+    used: Int,
+    attachments: List<Attachment>,
+    promptImages: List<Attachment>,
+    out: MutableList<ShortenedPath>,
+): Int {
+    out.clear()
+    if (attachments.isEmpty() || used == 0) return used
+    val text = String(chars, 0, used)
+    val pathMatches = attachments.flatMap { a ->
+        Regex.fromLiteral(a.remotePath).findAll(text).map { it.range to a.label }
+    }
+    val placeholderMatches = IMAGE_PLACEHOLDER.findAll(text).mapNotNull { m ->
+        val image = promptImages.getOrNull(m.groupValues[1].toInt() - 1) ?: return@mapNotNull null
+        m.range to image.label
+    }
+    val matches = (pathMatches + placeholderMatches).sortedBy { it.first.first }
+    if (matches.isEmpty()) return used
+
+    val columns = chars.size
+    val srcChars = chars.copyOf()
+    val srcStyles = styles.copyOf()
+    var src = 0
+    var dst = 0
+    fun put(ch: Char, style: Long) {
+        if (dst < columns) {
+            chars[dst] = ch
+            styles[dst] = style
+        }
+        dst++
+    }
+    for ((range, label) in matches) {
+        if (range.first < src) continue // overlaps one already rewritten
+        while (src < range.first) put(srcChars[src], srcStyles[src++])
+        val shownStart = dst
+        for (ch in label) put(ch, srcStyles[range.first])
+        src = range.last + 1
+        out.add(ShortenedPath(range.first, src, shownStart, dst))
+    }
+    val shownUsed = (dst + (used - src)).coerceAtMost(columns)
+    while (src < columns) put(srcChars[src], srcStyles[src++])
+    // What's left at the end mirrors the row's last cell, so a full-width background bar
+    // doesn't end in a stub. (A label longer than what it replaced pushes the row's end off
+    // screen instead.)
+    while (dst < columns) put(' ', srcStyles[columns - 1])
+    return shownUsed
+}
+
+/** Where source column [col] ends up after [relabelAttachments]; inside a rewritten span, its label's end. */
+private fun shownColumn(col: Int, spans: List<ShortenedPath>): Int {
+    var shift = 0
+    for (span in spans) {
+        if (col < span.srcStart) break
+        if (col < span.srcEnd) return span.shownEnd
+        shift += (span.srcEnd - span.srcStart) - (span.shownEnd - span.shownStart)
+    }
+    return col - shift
 }
 
 private fun drawRun(

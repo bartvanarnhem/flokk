@@ -142,6 +142,39 @@ class SshTransport(private val hostKeyVerifier: TofuHostKeyVerifier) {
     }
 
     /**
+     * Streams [content] into a new file under `~/.flokk/tmp` on the host and returns its
+     * absolute path there. [fileName] must already be safe to use unquoted (see
+     * `sanitizeFileName`); a name that's taken gets a `-1`, `-2`, ... suffix instead of
+     * overwriting a file an earlier prompt may still point at. Files older than a week are
+     * swept on every upload so the directory doesn't grow forever.
+     */
+    suspend fun uploadTempFile(fileName: String, content: InputStream): String = withContext(Dispatchers.IO) {
+        val ssh = client ?: error("Not connected")
+        val dot = fileName.lastIndexOf('.')
+        val (base, ext) = if (dot > 0) fileName.substring(0, dot) to fileName.substring(dot) else fileName to ""
+        // Run under `sh` explicitly: the exec channel otherwise goes through the user's own
+        // login shell, which may well be fish or something else that can't parse this.
+        val script = "d=\"\$HOME/.flokk/tmp\"; mkdir -p \"\$d\" || exit 1; " +
+            "find \"\$d\" -type f -mtime +7 -delete 2>/dev/null; " +
+            "f=\"\$d\"/${shellQuote(fileName)}; n=1; " +
+            "while [ -e \"\$f\" ]; do f=\"\$d\"/${shellQuote(base)}-\$n${shellQuote(ext)}; n=\$((n+1)); done; " +
+            "cat > \"\$f\" && printf %s \"\$f\""
+        val session = synchronized(sessionLock) { ssh.startSession() }
+        openChannels.incrementAndGet()
+        try {
+            val cmd = session.exec("sh -c ${shellQuote(script)}")
+            cmd.outputStream.use { content.copyTo(it) } // closing sends EOF, which ends `cat`
+            val path = readAll(cmd.inputStream)
+            cmd.join(30, TimeUnit.SECONDS)
+            check(cmd.exitStatus == 0 && path.isNotEmpty()) { "upload failed (exit ${cmd.exitStatus})" }
+            path
+        } finally {
+            synchronized(sessionLock) { runCatching { session.close() } }
+            openChannels.decrementAndGet()
+        }
+    }
+
+    /**
      * Opens an interactive PTY + login shell and types [attachCommand] into it, mirroring
      * what a user does over a plain `ssh -t host` connection.
      */

@@ -18,6 +18,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
@@ -226,6 +227,32 @@ class RemoteTerminalSession(
         withEmulator { it.paste(text) }
     }
 
+    /** Files uploaded from this session, whose full paths the canvas draws as short labels. */
+    @Volatile var attachments: List<Attachment> = emptyList()
+        private set
+
+    /**
+     * Images attached to the prompt being typed, in order. Agents (opencode, Claude Code)
+     * swap a pasted image path for a numbered `[Image N]` placeholder, so the canvas maps
+     * placeholder N back to entry N-1 here; numbering restarts with each prompt, so this
+     * clears on Enter.
+     */
+    @Volatile var promptImages: List<Attachment> = emptyList()
+        private set
+
+    /**
+     * Uploads [content] to the host this pane runs on and types its full path into the
+     * prompt, as a paste so an agent treats it like a dropped-in file reference.
+     */
+    suspend fun attachFile(fileName: String, content: InputStream) {
+        val path = transport.uploadTempFile(sanitizeFileName(fileName), content)
+        val attachment = Attachment(path)
+        attachments = attachments + attachment
+        if (attachment.isImage) promptImages = promptImages + attachment
+        paste("$path ")
+        dirty.set(true)
+    }
+
     /** Reads the emulator under [emulatorLock]; null until [start] has built one. */
     fun <T> withEmulator(block: (TerminalEmulator) -> T): T? {
         if (!isReady) return null
@@ -257,6 +284,7 @@ class RemoteTerminalSession(
 
     override fun write(data: ByteArray, offset: Int, count: Int) {
         if (count <= 0) return
+        if (count == 1 && data[offset] == TermKeys.ENTER[0]) promptImages = emptyList()
         // Copied because the caller (and Termux's emulator) reuses its buffer, and the write
         // itself happens later, on [ioScope].
         outbound.trySend(data.copyOfRange(offset, offset + count))

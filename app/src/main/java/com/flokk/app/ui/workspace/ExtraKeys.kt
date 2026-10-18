@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -41,7 +42,7 @@ import com.flokk.app.ui.theme.Tui
  * the one place left custom-drawn; everything else defers to the real keyboard.
  */
 @Composable
-fun TermuxModifierRow(session: RemoteTerminalSession?) {
+fun TermuxModifierRow(session: RemoteTerminalSession?, onAttach: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     // Laid out like Termux's own bar: both rows share one column grid (↑ directly above ↓,
     // PGUP above PGDN, ...) so every key has an obvious column, with no divider between rows.
@@ -78,11 +79,21 @@ fun TermuxModifierRow(session: RemoteTerminalSession?) {
                 HKey("|", Modifier.weight(1f)) { session?.sendText("|") }
             }
         }
+        // Both span the two rows, so the 8-column grid to their left stays aligned.
+        // Uploads a file to the host and drops its path into the prompt (see
+        // [RemoteTerminalSession.attachFile]).
+        KeyBox(Modifier.weight(0.7f).fillMaxHeight(), onClick = onAttach) {
+            Icon(
+                imageVector = Icons.Outlined.AttachFile,
+                contentDescription = "Attach file",
+                tint = KeyLabelColor,
+                modifier = Modifier.size(20.dp),
+            )
+        }
         // The counterpart to long-press-drag copying on the canvas: the system keyboard's
         // own paste only reaches views that hold a text selection, which a terminal canvas
-        // never does, so pasting needs a key of its own. Spans both rows so the 8-column
-        // grid to its left stays aligned.
-        KeyBox(Modifier.weight(1f).fillMaxHeight(), onClick = {
+        // never does, so pasting needs a key of its own.
+        KeyBox(Modifier.weight(0.7f).fillMaxHeight(), onClick = {
             clipboard.getText()?.text?.let { session?.paste(it) }
         }) {
             Icon(

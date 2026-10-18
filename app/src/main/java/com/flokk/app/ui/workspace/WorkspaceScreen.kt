@@ -1,5 +1,11 @@
 package com.flokk.app.ui.workspace
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +27,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -38,6 +45,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +54,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,9 +82,13 @@ import com.flokk.app.ui.LocalFlokk
 import com.flokk.app.ui.theme.Tui
 import com.flokk.app.ui.theme.TuiConfirmDialog
 import com.flokk.app.ui.theme.TuiIconButton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.FilterInputStream
+import java.io.InputStream
 
 /** Everything read off every connected host's own [HerdrRepository.state] in one pass, so
  *  the tab strip and the per-host status line below both drive off the same subscriptions
@@ -185,6 +200,27 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     val keyboardVisible = WindowInsets.isImeVisible
     var pendingClose by remember { mutableStateOf<HostWorkspace?>(null) }
     var newWorkspaceMenuOpen by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val uploads = remember { mutableStateListOf<UploadProgress>() }
+    val pickAttachment = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val target = session
+        if (uri == null || target == null) return@rememberLauncherForActivityResult
+        val (name, size) = context.describe(uri)
+        val upload = UploadProgress(name, size)
+        uploads.add(upload)
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val input = context.contentResolver.openInputStream(uri) ?: error("can't read file")
+                    CountingInputStream(input) { upload.sent = it }.use { target.attachFile(name, it) }
+                }
+            }.onFailure {
+                Toast.makeText(context, "Attach failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+            uploads.remove(upload)
+        }
+    }
 
     // Visible by default, as soon as a pane is attached — matching a real terminal app.
     LaunchedEffect(session, inputView) {
@@ -341,6 +377,9 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+            if (uploads.isNotEmpty()) {
+                UploadsOverlay(uploads, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+            }
         }
 
         // Invisible: exists only to hold IME focus and receive committed text/backspaces from
@@ -364,7 +403,10 @@ fun WorkspaceScreen(onBack: () -> Unit) {
         )
 
         QuickAnswerRow(session = session)
-        TermuxModifierRow(session = session)
+        TermuxModifierRow(
+            session = session,
+            onAttach = { if (session != null) pickAttachment.launch("*/*") },
+        )
     }
 
     pendingClose?.let { toClose ->
@@ -391,6 +433,68 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             onChange = { transform -> app.settingsStore.update(transform) },
             onDismiss = { settingsOpen = false },
         )
+    }
+}
+
+/** The picked document's name (what a file manager would show) and byte size, where its provider says. */
+private fun Context.describe(uri: Uri): Pair<String, Long?> {
+    val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+    return contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val name = cursor.getString(0) ?: "file"
+        val size = if (cursor.isNull(1)) null else cursor.getLong(1)
+        name to size
+    } ?: ("file" to null)
+}
+
+/** One in-flight attachment upload; [sent] is written from the upload's IO thread. */
+private class UploadProgress(val name: String, val total: Long?) {
+    var sent by mutableLongStateOf(0L)
+}
+
+/** Reports the running byte count to [onProgress] as the upload reads through [input]. */
+private class CountingInputStream(input: InputStream, private val onProgress: (Long) -> Unit) : FilterInputStream(input) {
+    private var count = 0L
+
+    override fun read(): Int = super.read().also { if (it >= 0) onProgress(++count) }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int =
+        super.read(b, off, len).also { if (it > 0) { count += it; onProgress(count) } }
+}
+
+/** A small translucent card listing every upload in flight, each with its own progress bar. */
+@Composable
+private fun UploadsOverlay(uploads: List<UploadProgress>, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .width(200.dp)
+            .background(Tui.background.copy(alpha = 0.8f), RoundedCornerShape(6.dp))
+            .border(BorderStroke(1.dp, Tui.border), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for (upload in uploads) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "↑ ${upload.name}",
+                    style = Tui.label.copy(color = Tui.textDim, fontSize = 10.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val total = upload.total
+                if (total != null && total > 0) {
+                    LinearProgressIndicator(
+                        progress = { (upload.sent.toFloat() / total).coerceIn(0f, 1f) },
+                        color = Tui.accentBlue,
+                        trackColor = Tui.border,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    // The provider didn't say how big the file is, so there's no fraction to show.
+                    LinearProgressIndicator(color = Tui.accentBlue, trackColor = Tui.border, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
     }
 }
 
