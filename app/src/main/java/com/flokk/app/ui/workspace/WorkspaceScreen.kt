@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
@@ -266,6 +267,13 @@ fun WorkspaceScreen(onBack: () -> Unit) {
         imeWasVisible = keyboardVisible
     }
 
+    // The input view's focus goes away with this screen, but the soft keyboard doesn't on its
+    // own, and left up it would cover the connections screen's bottom bar.
+    val leave = {
+        inputView?.hideKeyboard()
+        onBack()
+    }
+
     fun createWorkspace(repo: HerdrRepository) {
         panel = Panel.NONE
         val profileId = repo.currentProfile?.id
@@ -290,7 +298,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             canAdd = repositories.isNotEmpty(),
             panel = panel,
             softKeyboardOn = softKeyboardOn,
-            onBack = onBack,
+            onBack = leave,
             onRefresh = { currentRepo?.let { repo -> scope.launch { repo.reconnect() } } },
             onAdd = {
                 when {
@@ -402,7 +410,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     error = failure,
                     hostName = current.profile.displayName,
                     reconnecting = reconnecting,
-                    onConnections = onBack,
+                    onConnections = leave,
                     onRetry = { currentRepo?.let { repo -> scope.launch { repo.reconnect() } } },
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
@@ -410,7 +418,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     title = "Not connected to any host",
                     message = "Connect a host to open its workspaces.",
                     actionLabel = "Connections",
-                    onAction = onBack,
+                    onAction = leave,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
                 activeSession == null -> Text(
@@ -929,11 +937,13 @@ private fun WorkspaceTab(
     val shape = RoundedCornerShape(6.dp)
     Row(
         modifier = Modifier
-            .height(if (compact) 24.dp else 32.dp)
+            // A minimum, not a fixed height: with a larger system font scale the two-line
+            // label needs more room than 32dp and would otherwise spill over the border.
+            .heightIn(min = if (compact) 24.dp else 32.dp)
             .background(if (isCurrent) Flokk.raised else Color.Transparent, shape)
             .border(BorderStroke(1.dp, if (isCurrent) Flokk.accent else Flokk.border), shape)
             .plainClickable(onClick = onClick)
-            .padding(start = 9.dp, end = if (isCurrent) 3.dp else 9.dp),
+            .padding(start = 9.dp, end = if (isCurrent) 3.dp else 9.dp, top = 2.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -941,6 +951,7 @@ private fun WorkspaceTab(
             fontFamily = Flokk.sans,
             fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
             fontSize = if (compact) 12.sp else 13.sp,
+            lineHeight = if (compact) 15.sp else 16.sp,
             color = if (isCurrent || !compact) Flokk.text else Flokk.textSecondary,
         )
         if (compact) {
