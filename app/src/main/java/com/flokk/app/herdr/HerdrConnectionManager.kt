@@ -7,9 +7,8 @@ import com.flokk.app.ssh.TofuHostKeyVerifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -41,17 +40,18 @@ class HerdrConnectionManager(
     private val _connectingIds = MutableStateFlow<Set<String>>(emptySet())
     val connectingIds: StateFlow<Set<String>> = _connectingIds
 
-    /** One-shot connect failures, for a snackbar — the failed attempt's [HerdrRepository] is
-     *  discarded immediately, so its [RepoState.ConnectFailed] message has to be forwarded here
-     *  before it's gone. */
-    private val _connectErrors = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val connectErrors: SharedFlow<String> = _connectErrors
+    /** The last connect failure per [ConnectionProfile.id], shown in that host's card until
+     *  the next attempt — the failed attempt's [HerdrRepository] is discarded immediately, so
+     *  its [RepoState.ConnectFailed] message has to be kept here before it's gone. */
+    private val _connectErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val connectErrors: StateFlow<Map<String, String>> = _connectErrors
 
     fun isConnected(profileId: String): Boolean = _repositories.value.containsKey(profileId)
 
     suspend fun connect(profile: ConnectionProfile) {
         if (_repositories.value.containsKey(profile.id) || _connectingIds.value.contains(profile.id)) return
         _connectingIds.update { it + profile.id }
+        _connectErrors.update { it - profile.id }
         try {
             val repo = HerdrRepository(SshTransport(hostKeyVerifier), profileStore)
             repo.connect(profile)
@@ -59,7 +59,7 @@ class HerdrConnectionManager(
                 is RepoState.Connected -> _repositories.update { it + (profile.id to repo) }
                 is RepoState.ConnectFailed -> {
                     repo.disconnect()
-                    _connectErrors.tryEmit(state.message)
+                    _connectErrors.update { it + (profile.id to state.message) }
                 }
                 else -> repo.disconnect()
             }
@@ -76,6 +76,19 @@ class HerdrConnectionManager(
     fun disconnectAll() {
         _repositories.value.values.forEach { it.disconnect() }
         _repositories.value = emptyMap()
+    }
+
+    /**
+     * The connections screen's "reload": force-reconnects every connected host (reviving a
+     * session that silently died in the background) and retries every autoconnect host that
+     * isn't connected. Returns once every attempt has finished.
+     */
+    suspend fun reloadAll() = coroutineScope {
+        val connected = _repositories.value
+        connected.values.forEach { repo -> launch { repo.reconnect() } }
+        profileStore.listProfiles()
+            .filter { it.autoConnect && it.id !in connected }
+            .forEach { profile -> launch { connect(profile) } }
     }
 
     /** Connects every saved profile with [ConnectionProfile.autoConnect] set, on app start. */

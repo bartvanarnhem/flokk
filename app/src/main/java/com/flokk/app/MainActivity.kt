@@ -7,7 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.CompositionLocalProvider
 import com.flokk.app.ui.LocalFlokk
 import com.flokk.app.ui.nav.FlokkNavHost
-import com.flokk.app.ui.theme.FlokkTuiTheme
+import com.flokk.app.ui.theme.FlokkTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -15,7 +15,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             CompositionLocalProvider(LocalFlokk provides (application as FlokkApplication)) {
-                FlokkTuiTheme {
+                FlokkTheme {
                     FlokkNavHost()
                 }
             }

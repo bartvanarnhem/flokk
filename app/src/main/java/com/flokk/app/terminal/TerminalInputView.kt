@@ -75,6 +75,14 @@ class TerminalInputView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * Takes input focus without asking for the soft keyboard. The IME still binds to this view's
+     * InputConnection, so a hardware keyboard types exactly as it does with the keyboard shown.
+     */
+    fun focusInput() {
+        requestFocus()
+    }
+
     fun showKeyboard() {
         requestFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager

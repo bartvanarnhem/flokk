@@ -45,9 +45,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.flokk.app.ui.theme.Tui
+import com.flokk.app.ui.theme.Flokk
 import com.termux.terminal.TerminalColors
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TextStyle
@@ -442,48 +443,35 @@ fun TerminalCanvasView(
                 )
             }
 
-            // `isReady` only means the local emulator was constructed, not that the SSH
-            // attach actually succeeded — [RemoteTerminalSession.start] sets it up front so
-            // the canvas has somewhere to draw while the real attach happens asynchronously.
-            // Without checking `error` too, a failed attach silently looks identical to an
-            // empty-but-healthy pane: just a bare cursor, forever.
-            val attachError = session.error
-            if (attachError != null && session.finished) {
-                Text(
-                    text = "attach failed: $attachError",
-                    style = Tui.label.copy(color = Tui.accentRed),
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                )
-            }
-
+            // A failed attach (`session.error`) is shown by the workspace screen, over this canvas.
             if (showCopiedBadge) {
                 Text(
                     text = "copied",
-                    style = Tui.label.copy(color = Tui.background),
+                    style = Flokk.small.copy(color = Flokk.onAccent, fontWeight = FontWeight.Medium),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 4.dp)
-                        .background(Tui.accentGreen, RoundedCornerShape(4.dp))
+                        .background(Flokk.green, RoundedCornerShape(4.dp))
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             } else if (showLinkError) {
                 Text(
                     text = "couldn't open link",
-                    style = Tui.label.copy(color = Tui.background),
+                    style = Flokk.small.copy(color = Flokk.onAccent, fontWeight = FontWeight.Medium),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 4.dp)
-                        .background(Tui.accentRed, RoundedCornerShape(4.dp))
+                        .background(Flokk.red, RoundedCornerShape(4.dp))
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             } else if (scrollRows != 0) {
                 Text(
                     text = "history -$scrollRows · tap to jump to live",
-                    style = Tui.label.copy(color = Tui.background),
+                    style = Flokk.small.copy(color = Flokk.onAccent, fontWeight = FontWeight.Medium),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 4.dp)
-                        .background(Tui.accentYellow, RoundedCornerShape(4.dp))
+                        .background(Flokk.accent, RoundedCornerShape(4.dp))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -633,7 +621,7 @@ private fun drawTerminalFrame(
         val baseline = top + ascent
 
         if (shortened.isNotEmpty()) {
-            paint.color = Tui.accentBlue.copy(alpha = 0.25f).toArgb()
+            paint.color = Flokk.terminalLink.copy(alpha = 0.25f).toArgb()
             for (span in shortened) {
                 canvas.drawRect(span.shownStart * cellWidth, top, min(span.shownEnd, columns) * cellWidth, top + cellHeight, paint)
             }
@@ -653,7 +641,7 @@ private fun drawTerminalFrame(
             for ((range, url) in findLinksInRow(String(rowChars, 0, shownUsed))) {
                 linksOut.add(TerminalLink(row, range.first, range.last + 1, url))
                 val underlineTop = top + cellHeight - max(1.5f, cellHeight * 0.06f)
-                paint.color = Tui.accentBlue.toArgb()
+                paint.color = Flokk.terminalLink.toArgb()
                 canvas.drawRect(
                     range.first * cellWidth,
                     underlineTop,

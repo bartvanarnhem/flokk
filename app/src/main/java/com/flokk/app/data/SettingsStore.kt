@@ -7,18 +7,18 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /** Terminal font size presets. Pinch-to-zoom still adjusts freely from whichever is picked. */
 enum class FontSizePreset(val label: String, val sp: Float) {
-    SMALL("small", 11f),
-    STANDARD("standard", 13f),
-    BIG("big", 16f),
+    SMALL("Small", 11f),
+    STANDARD("Standard", 13f),
+    BIG("Big", 16f),
 }
 
 /** How the workspace tab strip is laid out. */
 enum class TabLayout(val label: String) {
     /** One scrollable row of every workspace, most recently used first. */
-    SINGLE_ROW("single row"),
+    SINGLE_ROW("Single row"),
 
     /** One scrollable row per host, with compact one-line tiles. */
-    GROUP_BY_HOST("group by host"),
+    GROUP_BY_HOST("Group by host"),
 }
 
 data class AppSettings(
@@ -28,7 +28,7 @@ data class AppSettings(
 
 /**
  * User-facing app settings, persisted in plain prefs (nothing sensitive) and exposed as a
- * [StateFlow] so a change made in the settings dialog applies immediately.
+ * [StateFlow] so a change made in the settings panel applies immediately.
  */
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("flokk_settings", Context.MODE_PRIVATE)

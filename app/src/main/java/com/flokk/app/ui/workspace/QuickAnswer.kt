@@ -1,13 +1,10 @@
 package com.flokk.app.ui.workspace
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,12 +19,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flokk.app.terminal.RemoteTerminalSession
-import com.flokk.app.ui.theme.Tui
+import com.flokk.app.ui.theme.Flokk
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -57,14 +55,14 @@ fun QuickAnswerRow(session: RemoteTerminalSession?) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Tui.surface)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .background(Flokk.background)
+            .padding(start = 6.dp, end = 6.dp, top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         current.choices.forEachIndexed { index, choice ->
             QuickAnswerButton(
                 choice = choice,
-                accent = if (index == 0) Tui.accentGreen else Tui.accentBlue,
+                primary = index == 0,
                 modifier = Modifier.weight(1f),
                 onClick = { session?.sendText(choice.send) },
             )
@@ -72,27 +70,38 @@ fun QuickAnswerRow(session: RemoteTerminalSession?) {
     }
 }
 
+/** The first choice (usually the affirmative) is tinted green; the rest are plain cards. */
 @Composable
 private fun QuickAnswerButton(
     choice: DetectedChoice,
-    accent: Color,
+    primary: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    Box(
+    val background = if (primary) Flokk.greenBackground else Flokk.card
+    val content = if (primary) Flokk.green else Flokk.text
+    Row(
         modifier = modifier
-            .height(40.dp)
-            .background(if (pressed) accent.copy(alpha = 0.25f) else Color.Transparent, RoundedCornerShape(6.dp))
-            .border(BorderStroke(1.dp, accent), RoundedCornerShape(6.dp))
+            .height(36.dp)
+            .background(if (pressed) Flokk.raised else background, RoundedCornerShape(8.dp))
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center,
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "[${choice.send}] ${choice.label}",
-            style = Tui.label.copy(color = accent, fontSize = 11.sp),
+            text = choice.send,
+            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = if (primary) Flokk.background else Flokk.text),
+            maxLines = 1,
+            modifier = Modifier
+                .background(if (primary) Flokk.green else Flokk.border, RoundedCornerShape(6.dp))
+                .padding(horizontal = 7.dp, vertical = 1.dp),
+        )
+        Text(
+            text = choice.label,
+            style = Flokk.bodyMedium.copy(color = content),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
