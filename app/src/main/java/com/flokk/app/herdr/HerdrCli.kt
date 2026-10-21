@@ -14,8 +14,37 @@ class HerdrCli(
     private val profile: ConnectionProfile,
 ) {
 
+    /**
+     * The binary every command runs. Starts as the profile's own [ConnectionProfile.herdrBinary];
+     * see [resolveBinary] for when that changes.
+     */
+    @Volatile private var binary: String = profile.herdrBinary
+    @Volatile private var binaryResolved = false
+
+    /**
+     * herdr's installer puts it in `~/.local/bin`, which a non-interactive SSH exec shell
+     * often doesn't have on PATH (that's usually added in ~/.bashrc / ~/.profile, which exec
+     * sessions don't source). So when the configured binary is a bare name the remote shell
+     * can't find, fall back to `~/.local/bin/<name>` if it exists there. Checked once per
+     * connection, on the first snapshot; an explicit path is always used as given.
+     */
+    private suspend fun resolveBinary() {
+        if (binaryResolved) return
+        val name = profile.herdrBinary
+        if (!name.contains('/')) {
+            val fallback = "\$HOME/.local/bin/$name"
+            val probe = "command -v ${shellQuote(name)} >/dev/null 2>&1 || " +
+                "{ test -x \"$fallback\" && echo \"$fallback\"; }"
+            // A failed probe (e.g. the transport dropped) leaves this unresolved, to retry next time.
+            val found = runCatching { transport.execBatch(probe) }.getOrNull() ?: return
+            found.trim().lineSequence().lastOrNull { it.startsWith("/") }?.let { binary = shellQuote(it) }
+        }
+        binaryResolved = true
+    }
+
     /** One SSH round trip: workspaces, panes, and agents in a single batched exec. */
     suspend fun fetchSnapshot(): SnapshotResult {
+        resolveBinary()
         val cmd = buildString {
             // herdr's list subcommands don't take a `--json` flag (they error on it with a
             // usage message); they emit JSON automatically once stdout isn't a TTY, which is
@@ -43,9 +72,10 @@ class HerdrCli(
             val snippet = workspacesPart.trim().take(200)
             return SnapshotResult.Failure(
                 if (snippet.isEmpty()) {
-                    "`herdr workspace list` produced no output — is the \"Binary\" field an " +
-                        "absolute path? (SSH exec sessions don't source ~/.bashrc, so a PATH " +
-                        "entry added there won't apply here)"
+                    "`herdr workspace list` produced no output — herdr wasn't found on PATH or " +
+                        "in ~/.local/bin. Set the \"Binary\" field to its absolute path (SSH " +
+                        "exec sessions don't source ~/.bashrc, so a PATH entry added there " +
+                        "won't apply here)"
                 } else {
                     "unexpected output from `herdr workspace list`: $snippet"
                 },
@@ -141,6 +171,6 @@ class HerdrCli(
             ?.takeIf { it.isNotBlank() }
             ?.let { "HERDR_SESSION=${shellQuote(it)} " }
             ?: ""
-        return "$sessionEnv${profile.herdrBinary} $rest"
+        return "$sessionEnv$binary $rest"
     }
 }
