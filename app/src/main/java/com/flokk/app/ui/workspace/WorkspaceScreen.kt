@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -1017,10 +1018,16 @@ private fun WorkspaceTab(
 private fun AgentIndicator(state: AgentState?, spinnerFrame: Int) {
     val color = state.indicatorColor()
     when (state) {
-        AgentState.WORKING -> Text(
-            text = SPINNER_FRAMES[spinnerFrame].toString(),
-            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 12.sp, color = color),
-        )
+        // The braille glyph comes from a fallback font whose tall line metrics would otherwise
+        // stretch a working tab taller than its neighbours, so it's drawn unbounded inside a
+        // box the same size as the other indicators.
+        AgentState.WORKING -> Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = SPINNER_FRAMES[spinnerFrame].toString(),
+                style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 12.sp, color = color),
+                modifier = Modifier.wrapContentSize(unbounded = true),
+            )
+        }
         AgentState.BLOCKED -> Icon(
             imageVector = Icons.Rounded.Notifications,
             contentDescription = "Needs input",
