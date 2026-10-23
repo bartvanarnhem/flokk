@@ -87,6 +87,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.flokk.app.data.ConnectionProfile
+import com.flokk.app.data.FontSizePreset
 import com.flokk.app.data.TabLayout
 import com.flokk.app.herdr.AgentState
 import com.flokk.app.herdr.HerdrRepository
@@ -209,6 +210,9 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     val settings by app.settingsStore.settings.collectAsState()
     // Pinch-to-zoom adjusts freely from here; picking a preset in settings resets to it.
     var fontSize by remember(settings.fontSize) { mutableFloatStateOf(settings.fontSize.sp) }
+    // Workspace names follow the picked preset (not pinch-zoom, which would outgrow the
+    // header), scaled relative to Standard so that preset keeps the designed sizes.
+    val nameScale = settings.fontSize.sp / FontSizePreset.STANDARD.sp
     var panel by remember { mutableStateOf(Panel.NONE) }
 
     LaunchedEffect(currentKey) {
@@ -298,6 +302,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             canAdd = repositories.isNotEmpty(),
             panel = panel,
             softKeyboardOn = softKeyboardOn,
+            nameScale = nameScale,
             onBack = leave,
             onRefresh = { currentRepo?.let { repo -> scope.launch { repo.reconnect() } } },
             onAdd = {
@@ -342,6 +347,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             closingKey = pendingClose?.key,
             multiHost = repositories.size > 1,
             layout = settings.tabLayout,
+            nameScale = nameScale,
             hostOrder = repositories.keys.toList(),
             hostStates = aggregate.hostStates,
             onSelect = { selectedKey = it; pendingClose = null },
@@ -483,6 +489,7 @@ private fun WorkspaceHeader(
     canAdd: Boolean,
     panel: Panel,
     softKeyboardOn: Boolean,
+    nameScale: Float,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
@@ -492,7 +499,7 @@ private fun WorkspaceHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(42.dp)
+            .heightIn(min = 42.dp)
             .padding(horizontal = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -507,7 +514,7 @@ private fun WorkspaceHeader(
         Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
             Text(
                 text = current?.let { "${it.profile.displayName} · ${it.overview.workspace.label}" } ?: "No workspace",
-                style = TextStyle(fontFamily = Flokk.sans, fontWeight = FontWeight.Medium, fontSize = 14.5.sp, lineHeight = 18.sp, color = Flokk.text),
+                style = TextStyle(fontFamily = Flokk.sans, fontWeight = FontWeight.Medium, fontSize = 14.5.sp * nameScale, lineHeight = 18.sp * nameScale, color = Flokk.text),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -772,6 +779,7 @@ private fun WorkspaceTabsRow(
     closingKey: String?,
     multiHost: Boolean,
     layout: TabLayout,
+    nameScale: Float,
     hostOrder: List<String>,
     hostStates: Map<String, RepoState.Connected>,
     onSelect: (String) -> Unit,
@@ -797,6 +805,7 @@ private fun WorkspaceTabsRow(
             closingKey = closingKey,
             spinnerFrame = spinnerFrame,
             compact = false,
+            nameScale = nameScale,
             multiHost = multiHost,
             onSelect = onSelect,
             onClose = onClose,
@@ -836,6 +845,7 @@ private fun WorkspaceTabsRow(
                                 closingKey = closingKey,
                                 spinnerFrame = spinnerFrame,
                                 compact = true,
+                                nameScale = nameScale,
                                 multiHost = multiHost,
                                 onSelect = onSelect,
                                 onClose = onClose,
@@ -858,6 +868,7 @@ private fun WorkspaceTabStrip(
     closingKey: String?,
     spinnerFrame: Int,
     compact: Boolean,
+    nameScale: Float,
     multiHost: Boolean,
     onSelect: (String) -> Unit,
     onClose: (HostWorkspace) -> Unit,
@@ -907,6 +918,7 @@ private fun WorkspaceTabStrip(
                 closing = hostWorkspace.key == closingKey,
                 spinnerFrame = spinnerFrame,
                 compact = compact,
+                nameScale = nameScale,
                 multiHost = multiHost,
                 onClick = { onSelect(hostWorkspace.key) },
                 onClose = { onClose(hostWorkspace) },
@@ -928,6 +940,7 @@ private fun WorkspaceTab(
     closing: Boolean,
     spinnerFrame: Int,
     compact: Boolean,
+    nameScale: Float,
     multiHost: Boolean,
     onClick: () -> Unit,
     onClose: () -> Unit,
@@ -950,8 +963,8 @@ private fun WorkspaceTab(
         val labelStyle = TextStyle(
             fontFamily = Flokk.sans,
             fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
-            fontSize = if (compact) 12.sp else 13.sp,
-            lineHeight = if (compact) 15.sp else 16.sp,
+            fontSize = (if (compact) 12.sp else 13.sp) * nameScale,
+            lineHeight = (if (compact) 15.sp else 16.sp) * nameScale,
             color = if (isCurrent || !compact) Flokk.text else Flokk.textSecondary,
         )
         if (compact) {
